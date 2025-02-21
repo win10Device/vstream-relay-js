@@ -92,7 +92,7 @@ http.createServer(async function (req, res) {
         case 'loading':
           res.writeHead(200, {'Content-Type': 'video/vnd.dlna.mpeg-tts', 'Access-Control-Allow-Origin': '*'});
           //TODO: change this to load from memory instead!
-          var data = fs.readFileSync(`static/test1.ts`);
+          var data = fs.readFileSync(`static/loading.ts`);
           res.write(data);
           break;
         default:
