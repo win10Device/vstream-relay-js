@@ -4,7 +4,6 @@ var pfile = require('./package.json');
 
 const process = require('process');
 const M3U8FileParser = require('m3u8-file-parser');
-const content = fs.readFileSync('./test.m3u8', { encoding: 'utf-8'});
 const axios = require('axios');
 
 const { Jimp, loadFont } = require('jimp');
