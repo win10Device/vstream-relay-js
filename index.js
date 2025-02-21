@@ -27,7 +27,7 @@ fs.readFile('static/m3u.txt', 'utf8', (err, data) => {
 var streams = {
 };
 var image;
-async function generateImage(thumbnail, msg) {
+async function generateImage(thumbnail, msg) { //temp
   image = await Jimp.read('static/fallback-thumbnail.jpg');
   image.blur(20, function (err) { if (err) throw err; });
   image.resize({ w:1920, h:1080});
