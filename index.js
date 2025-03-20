@@ -23,8 +23,7 @@ fs.readFile('static/m3u.txt', 'utf8', (err, data) => {
   template = data;
 });
 
-var streams = {
-};
+var streams = new Map();
 var image;
 async function generateImage(thumbnail, msg) { //temp
   image = await Jimp.read('static/fallback-thumbnail.jpg');
@@ -80,13 +79,13 @@ setInterval(CleanUp, 5000);
 http.createServer(async function (req, res) {
   const url=req.url.substring(1).trim().split('/');
   if (url.length>1) {
-    if (streams.hasOwnProperty(url[0])) {
+    if (streams.has(url[0])) {
       const before = Date.now();
       switch(url[1]) {
         case '':
-          streams[url[0]].accessed=Math.floor(Date.now()/1000);
+          streams.get(url[0]).accessed=Math.floor(Date.now()/1000);
           res.writeHead(200, {'Access-Control-Allow-Origin': '*'});
-          res.write(GenerateM3U8(streams[url[0]]));
+          res.write(GenerateM3U8(streams.get(url[0])));
           break;
         case 'loading':
           res.writeHead(200, {'Content-Type': 'video/vnd.dlna.mpeg-tts', 'Access-Control-Allow-Origin': '*'});
@@ -97,15 +96,10 @@ http.createServer(async function (req, res) {
         default:
           if (url[1].length==32) {
             res.writeHead(200, {'Content-Type': 'video/vnd.dlna.mpeg-tts', 'Access-Control-Allow-Origin': '*'});
-            if (streams[url[0]].chunks[streams[url[0]].chunks.length-1].f===url[1]) {
-              res.write(streams[url[0]].chunks[streams[url[0]].chunks.length-1].d);
+            var stream = streams.get(url[0]);
+            if (stream.chunks.has(url[1])) {
+              res.write(stream.chunks.get(url[1]).d);
               TrackViewers(url[0], req.headers.hasOwnProperty('X-Forwarded-For') ? req.headers['X-Forwarded-For'] : req.socket.remoteAddress);
-            } else {
-              var _d=streams[url[0]].chunks.find(({f})=>f===url[1]);
-              if(typeof(_d)!=='undefined') {
-                res.write(_d.d);
-                TrackViewers(url[0], req.headers.hasOwnProperty('X-Forwarded-For') ? req.headers['X-Forwarded-For'] : req.socket.remoteAddress);
-              }else res.writeHead(404);
             }
           } else res.writeHead(404);
           break;
@@ -120,9 +114,9 @@ http.createServer(async function (req, res) {
       switch (_res.status) {
         case 200:
           if(_res.data.vstream!=null) {
-            streams[url[0]] = {
+            streams.set(url[0], {
               stream: _res.data.vstream,
-              chunks: [],
+              chunks: new Map(),
               isLoading: false,
               isError: false,
               callback: 0,
@@ -133,11 +127,11 @@ http.createServer(async function (req, res) {
               },
               markers: [],
               accessed: (Date.now()*1000),
-              viewers: []
-            };
+              viewers: new Map()
+            });
             await StreamFetchChunkA(url[0]);
             res.writeHead(200, {'Access-Control-Allow-Origin': '*'});
-            res.write(GenerateM3U8(streams[url[0]]));
+            res.write(GenerateM3U8(streams.get(url[0])));
           } else {
             console.log('Not an active stream');
             res.writeHead(404);
@@ -159,12 +153,12 @@ http.createServer(async function (req, res) {
 }).listen(8081);
 
 async function StreamFetchChunkA(key) {
-  if(!streams.hasOwnProperty(key))return;
+  if(!streams.has(key)) return;
   try {
-    var stream = streams[key];
+    var stream = streams.get(key);
     if (!stream.isError) {
       const beforeA = Date.now();
-      const res = await axios.get(`${stream.stream}/stream`, { validateStatus:false });
+      const res = await axios.get(`${stream.stream}/output.m3u8`, { validateStatus:false });
       const durationA = Date.now()-beforeA;
       if (res.status == 200) {
         if (typeof(res.data) === 'string') {
@@ -177,16 +171,16 @@ async function StreamFetchChunkA(key) {
             const durationB = Date.now()-beforeB;
             if(_res.status == 200) {
               var id = crypto.randomBytes(16).toString("hex");
-              stream.chunks.push({f:`${id}`,d: Buffer.from(_res.data), t: (data.segments[data.segments.length-1].inf.duration)}); //res.data
-              if(stream.chunks.length>4) stream.chunks.shift();
+              stream.chunks.set(`${id}`, {d: Buffer.from(_res.data), t: (data.segments[data.segments.length-1].inf.duration)}); //res.data
+              if(stream.chunks.length>4) stream.chunks.delete(stream.chunks.keys().next().value);
               if(stream.markers.length>1) {
                 if (stream.markers[0].endsWith('#EXT-X-DISCONTINUITY')) stream.sequence.discontinuity++;
                 stream.sequence.media++;
                 stream.markers.shift();
               }
-              if(stream.chunks.length>1) {
-                var chunk = stream.chunks[stream.chunks.length-2]; //Get previous chunk
-                stream.markers.push(`\n#EXTINF:${chunk.t},\n${chunk.f}`);
+              if(stream.chunks.size>1) {
+                var chunk = [...stream.chunks.entries()].at(-2); //Get previous chunk
+                stream.markers.push(`\n#EXTINF:${chunk[1].t},\n${chunk[0]}`);
                 stream.callback = setTimeout(() => StreamFetchChunkA(key),(data.segments[data.segments.length-1].inf.duration*1000)-(durationA+durationB));
               } else {
                 stream.markers.push('\n#EXTINF:4.000000,\nloading\n#EXT-X-DISCONTINUITY');
@@ -204,6 +198,7 @@ async function StreamFetchChunkA(key) {
         console.log('b');
       }
     }
+    streams.set(key, stream);
   } catch(e) {
     console.log(e);
   }
@@ -219,15 +214,15 @@ function GenerateM3U8(stream) {
 function CleanUp() {
   var t = Math.floor(Date.now()/1000);
   var _t = (t - (Math.floor(t / 86400) * 86400));
-  Object.keys(streams).forEach((key) => {
-    if ((t-streams[key].accessed) >= 20) {
+  streams.forEach((value, key) => {
+    if ((t-value.accessed) >= 20) {
       console.log(`The stream "${key}" hasn't been accessed within 20 seconds, removing from cache list`);
-      delete streams[key];
-    } else if (Object.keys(streams[key].viewers).length > 0) {
-      Object.keys(streams[key].viewers).forEach((v) => {
-        if ((_t - streams[key].viewers[v].t) >= 10) delete streams[key].viewers[v];
+      delete streams.delete(key);
+    } else {
+      value.viewers.forEach((v, k) => {
+        if ((_t - v.t) >= 10) delete streams.get(key).viewers.delete(k);
       });
-      console.log(`${key} has ${Object.keys(streams[key].viewers).length} viewers`);
+      console.log(`${key} has ${value.viewers.size} viewers`);
     }
   });
 }
@@ -235,7 +230,7 @@ function CleanUp() {
 function TrackViewers(key, ip) {
   var _t = Math.floor(Date.now() / 1000); //ms to s
   var t = (_t - (Math.floor(_t / 86400) * 86400)); //Only want total hour seconds of day
-  if (streams[key].viewers.hasOwnProperty(ip))
-    streams[key].viewers[ip].t=t;
-  else streams[key].viewers[ip]={t:t};
+  if (streams.get(key).viewers.has(ip))
+    streams.get(key).viewers.get(ip).t = t;
+  else streams.get(key).viewers.set(ip, t);
 }
