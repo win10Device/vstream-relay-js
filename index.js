@@ -110,14 +110,15 @@ http.createServer(async function (req, res) {
       const before = Date.now();
       //call endpoint
       console.log(`Querying api for "${url[0]}"`);
-      const _res = await axios.get(`https://api.ranrom.net/test/query/${url[0]}/`,{validateStatus:false});
+      const _res = await axios.get(`https://streamapi.ranrom.net/query/${url[0]}`, {validateStatus:false});
       switch (_res.status) {
         case 200:
-          if(_res.data.vstream!=null) {
+          if(_res.data.endpoint!=null) {
+            const stream_url = !_res.data.test ? `https://${_res.data.endpoint}-ingest.vtubers.tv/${_res.data.user_id}` : `${_res.data.endpoint}/${_res.data.user_id}`;
             streams.set(url[0], {
-              stream: _res.data.vstream,
+              stream: stream_url,
               chunks: new Map(),
-              isLoading: false,
+              isLoading: true,
               isError: false,
               callback: 0,
               m3u8Reader: new M3U8FileParser(),
@@ -126,12 +127,17 @@ http.createServer(async function (req, res) {
                 discontinuity: 0
               },
               markers: [],
-              accessed: (Date.now()*1000),
+              accessed: Math.floor(Date.now()/1000),
               viewers: new Map()
             });
-            await StreamFetchChunkA(url[0]);
-            res.writeHead(200, {'Access-Control-Allow-Origin': '*'});
-            res.write(GenerateM3U8(streams.get(url[0])));
+            if (await StreamFetchChunkA(url[0])) {
+              streams.get(url[0]).isLoading = false;
+              res.writeHead(200, {'Access-Control-Allow-Origin': '*'});
+              res.write(GenerateM3U8(streams.get(url[0])));
+            } else {
+              streams.delete(url[0]);
+              res.writeHead(404);
+            }
           } else {
             console.log('Not an active stream');
             res.writeHead(404);
@@ -143,7 +149,7 @@ http.createServer(async function (req, res) {
           break;
       }
       const after = Date.now();
-      console.log(`Stream setup for ${url[0]} took ${after-before}ms`);
+      console.log(`Stream query for ${url[0]} took ${after-before}ms`);
     }
   } else {
     res.writeHead(200, {'Content-Type': 'application/json'});
@@ -158,7 +164,7 @@ async function StreamFetchChunkA(key) {
     var stream = streams.get(key);
     if (!stream.isError) {
       const beforeA = Date.now();
-      const res = await axios.get(`${stream.stream}/output.m3u8`, { validateStatus:false });
+      const res = await axios.get(`${stream.stream}/output.m3u8`, { validateStatus:false, timeout: 5000 });
       const durationA = Date.now()-beforeA;
       if (res.status == 200) {
         if (typeof(res.data) === 'string') {
@@ -186,6 +192,7 @@ async function StreamFetchChunkA(key) {
                 stream.markers.push('\n#EXTINF:4.000000,\nloading\n#EXT-X-DISCONTINUITY');
                 stream.callback = setTimeout(() => StreamFetchChunkA(key),4000 - (durationA+durationB));
               }
+              return true;
             } else {
               console.log(_res);
             }
@@ -196,11 +203,13 @@ async function StreamFetchChunkA(key) {
         } else console.log(`Expected type string, got ${typeof(res.data)}`);
       } else { //Assume the stream is ended
         console.log('b');
+        return false;
       }
     }
     streams.set(key, stream);
   } catch(e) {
     console.log(e);
+    return false;
   }
 }
 
@@ -217,12 +226,14 @@ function CleanUp() {
   streams.forEach((value, key) => {
     if ((t-value.accessed) >= 20) {
       console.log(`The stream "${key}" hasn't been accessed within 20 seconds, removing from cache list`);
-      delete streams.delete(key);
+      streams.delete(key);
     } else {
-      value.viewers.forEach((v, k) => {
-        if ((_t - v.t) >= 10) delete streams.get(key).viewers.delete(k);
-      });
-      console.log(`${key} has ${value.viewers.size} viewers`);
+      if (!value.isLoading) {
+        value.viewers.forEach((v, k) => {
+          if ((_t - v.t) >= 10) streams.get(key).viewers.delete(k);
+        });
+        console.log(`${key} has ${value.viewers.size} viewers`);
+      }
     }
   });
 }
