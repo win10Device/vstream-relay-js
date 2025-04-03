@@ -132,3 +132,5 @@ dist
 
 # Ignore cache file
 cache/
+
+config*

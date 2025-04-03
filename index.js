@@ -1,3 +1,4 @@
+const config = require('./config.json');
 var http = require('http');
 var fs = require('fs');
 var pfile = require('./package.json');
@@ -110,10 +111,10 @@ http.createServer(async function (req, res) {
       const before = Date.now();
       //call endpoint
       console.log(`Querying api for "${url[0]}"`);
-      const _res = await axios.get(`https://streamapi.ranrom.net/query/${url[0]}`, {validateStatus:false});
+      const _res = await axios.get(`${config.endpoint}/query/${url[0]}`, { validateStatus:false, headers: { 'authorization': `relays ${config.token}` }});
       switch (_res.status) {
         case 200:
-          if(_res.data.endpoint!=null) {
+          if(_res.data.endpoint!=null||_res.data.endpoint!="") {
             const stream_url = !_res.data.test ? `https://${_res.data.endpoint}-ingest.vtubers.tv/${_res.data.user_id}` : `${_res.data.endpoint}/${_res.data.user_id}`;
             streams.set(url[0], {
               stream: stream_url,
@@ -202,7 +203,8 @@ async function StreamFetchChunkA(key) {
           }
         } else console.log(`Expected type string, got ${typeof(res.data)}`);
       } else { //Assume the stream is ended
-        console.log('b');
+        console.log('Assuming the stream ended or something went wrong, cleaning up...');
+        streams.delete(key);
         return false;
       }
     }
